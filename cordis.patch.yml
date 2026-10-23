@@ -1,0 +1,43 @@
+# dsh-plugin-nuaa-search —— bundle patch
+# ============================================================================
+# 这是插件的"挂载声明"。DSH 启动时按 bundle 层栈叠加各插件的 patch：
+#   dsh-base → dsh-web-app → 各第三方 bundle（按 dsh.profile.bundles 顺序）→ 用户 cordis.patch.yml
+#
+# 本文件干三件事：
+#   1) insert 一行新插件（id 只在这个组合里唯一即可，name 必须是真实包名）；
+#   2) 把 web 接缝的搜索提供方指到它；
+#   3) 停掉官方那行（没官方 key 本来也用不了）。
+#
+# 注意：patch 是**整段替换**目标行的 config，所以第 2 段要把 web 行原本的
+# fetchProvider 一起写回来，否则抓网页的能力会丢。
+#
+# 用户仍然可以在 ~/.dsh/profiles/<profile>/cordis.patch.yml 里覆盖这里的一切
+# （用户层永远最后应用）。
+# ============================================================================
+
+# 1) 挂载插件本体
+- insert:
+    - id: web-search-local
+      name: dsh-plugin-nuaa-search
+      config:
+        # auto = bing → so360 → searxng，前一个拿不到结果才试下一个
+        backend: auto
+        maxResults: 8
+        deadlineMs: 20000
+        backendTimeoutMs: 8000
+        log: true
+
+# 2) 让 ctx.web 用本插件当搜索提供方
+#    （dsh-base 原本把 searchProvider 固定为 deepseek-official，那需要官方 key）
+- id: web
+  config:
+    searchProvider: local-search
+    fetchProvider: http
+
+# 3) 顺手把官方的 DeepSeek 搜索行停掉。
+#    不装官方 key 的机器上它本来也用不了；停掉可以少一个注册项，
+#    也避免将来有人把 searchProvider 清空后撞上
+#    WEB_PROVIDER_AMBIGUOUS（多个可用提供方）。
+#    想留用它就在用户层 cordis.patch.yml 里写 `- id: web-search-deepseek` + `disabled: false`。
+- id: web-search-deepseek
+  disabled: true

@@ -1,0 +1,41 @@
+{
+  "name": "dsh-plugin-nuaa-search",
+  "version": "0.1.0",
+  "description": "DSH 免 key 网页搜索插件：向 ctx.web 注册 local-search 搜索提供方，按降级链抓取 Bing 中文站/360/SearXNG 的真实结果，替换官方 DeepSeek web_search，不需要任何 API key。面向校园网等拿不到官方 key 的环境。",
+  "type": "module",
+  "main": "index.js",
+  "icon": "assets/icon-180.jpg",
+  "exports": {
+    ".": "./index.js",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "index.js",
+    "cordis.patch.yml",
+    "assets/",
+    "README.md",
+    "README.zh.md",
+    "LICENSE"
+  ],
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  },
+  "keywords": [
+    "dsh-plugin",
+    "deepseek-harness",
+    "web-search",
+    "search",
+    "bing",
+    "searxng",
+    "nuaa"
+  ],
+  "license": "MIT",
+  "engines": {
+    "node": ">=20.3"
+  },
+  "scripts": {
+    "test": "node --test test/provider.test.mjs"
+  }
+}
