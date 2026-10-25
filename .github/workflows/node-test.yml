@@ -1,0 +1,46 @@
+name: Test
+
+# 两档：
+#   unit —— 纯逻辑，不打网络，必须绿
+#   live —— 真的去 Bing 搜一次，只用来报告"搜索引擎现在还能不能抓"，
+#           失败不阻塞（评测环境/机房出口策略差异不该让 CI 变红）
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  unit:
+    name: unit (node ${{ matrix.node }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        node: [20, 22]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+      - name: Syntax check
+        run: node --input-type=module --check < index.js
+      - name: Unit tests (offline)
+        env:
+          SKIP_LIVE: '1'
+        run: node --test test/provider.test.mjs
+
+  live:
+    name: live network probes
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Live tests (hits real search engines)
+        run: node --test test/provider.test.mjs
