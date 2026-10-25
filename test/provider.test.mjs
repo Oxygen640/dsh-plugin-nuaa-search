@@ -2,7 +2,7 @@
 // 一半是纯逻辑（降级链、注册、截止时间），一半是真联网（真的去 Bing 搜）。
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import plugin, { LocalSearchProvider, resolveChain, apply, name, inject, normalizeQuery, MAX_QUERY_CHARS } from '../index.js';
+import plugin, { LocalSearchProvider, resolveChain, apply, name, inject, normalizeQuery, MAX_QUERY_CHARS, stripIntent, buildVariants, longestCommonSubstring, relevanceOf, chooseGroup } from '../index.js';
 
 // 真联网的用例带 SKIP_LIVE=1 就跳过（CI 的 unit job 用它，保证离线必过）
 const LIVE = { skip: process.env.SKIP_LIVE === '1' ? 'SKIP_LIVE=1（离线模式）' : false };
@@ -141,4 +141,41 @@ test('超长查询不会再搜不到（会被截断到上限内）', LIVE, async
   const long = 'DeepSeek 是什么'.repeat(200); // 远超上限
   const result = await provider.search({ query: long });
   assert.ok(result.sources.length > 0, '截断后仍应能搜到结果');
+});
+
+test('stripIntent：剥掉尾部意图词，得到实体短语', () => {
+  assert.equal(stripIntent('南航图书馆 开放时间'), '南航图书馆');
+  assert.equal(stripIntent('南京航空航天大学图书馆 预约座位'), '南京航空航天大学图书馆');
+  assert.equal(stripIntent('南京航空航天大学 图书馆 怎么预约座位'), '南京航空航天大学 图书馆');
+  assert.equal(stripIntent('DeepSeek 是什么'), 'DeepSeek');
+  // 只从尾部剥，不误伤词中的字
+  assert.equal(stripIntent('时间简史'), '时间简史');
+  assert.equal(stripIntent(''), '');
+});
+
+test('buildVariants：只有剥出实体短语时才多查一次', () => {
+  assert.deepEqual(buildVariants('南航图书馆 开放时间'), ['南航图书馆 开放时间', '南航图书馆']);
+  assert.deepEqual(buildVariants('DeepSeek'), ['DeepSeek']);
+  assert.deepEqual(buildVariants('南航图书馆 开放时间', false), ['南航图书馆 开放时间']);
+  assert.deepEqual(buildVariants('   '), []);
+});
+
+test('相关性选组：选更相关的那组，接近时保留原文组', () => {
+  assert.equal(longestCommonSubstring('南航图书馆', '南京航空航天大学图书馆'), 3);
+  const bad = [{ url: 'https://www.csair.com/cn/', title: '中国南方航空官网' }];
+  const good = [{ url: 'https://lib.nuaa.edu.cn/', title: '南京航空航天大学图书馆' }];
+  assert.ok(relevanceOf(good, '南航图书馆') > relevanceOf(bad, '南航图书馆'));
+  assert.deepEqual(chooseGroup([bad, good], '南航图书馆'), good);
+  const a = [{ url: 'https://www.deepseek.com/', title: 'DeepSeek' }];
+  const b = [{ url: 'https://deepseek.com.cn/', title: 'DeepSeek 官网' }];
+  assert.deepEqual(chooseGroup([a, b], 'DeepSeek'), a, '相关性接近时应保留原文组');
+  assert.deepEqual(chooseGroup([null, []], 'x'), []);
+});
+
+test('真联网：长尾中文查询也能命中学校官网', LIVE, async () => {
+  const provider = new LocalSearchProvider(() => ({ backend: 'bing', maxResults: 8, deadlineMs: 15000, backendTimeoutMs: 8000, searxngUrl: '', stripIntent: true, userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36', log: false }));
+  const result = await provider.search({ query: '南航图书馆 开放时间' });
+  const hit = result.sources.filter((s) => /nuaa\.edu\.cn/.test(s.url)).length;
+  assert.ok(hit >= 3, `应至少 3 条命中 nuaa.edu.cn，实际 ${hit} 条`);
+  console.log('    命中官网的结果:', result.sources.filter((s) => /nuaa\.edu\.cn/.test(s.url)).slice(0, 3).map((s) => s.url));
 });
