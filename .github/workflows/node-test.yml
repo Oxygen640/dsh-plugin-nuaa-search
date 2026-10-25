@@ -1,9 +1,7 @@
 name: Test
 
-# 两档：
-#   unit —— 纯逻辑，不打网络，必须绿
-#   live —— 真的去 Bing 搜一次，只用来报告"搜索引擎现在还能不能抓"，
-#           失败不阻塞（评测环境/机房出口策略差异不该让 CI 变红）
+# unit —— 纯逻辑，不打网络，必须绿
+# live —— 真去 Bing 搜一次，只手动触发（GitHub runner 在境外，cn.bing.com 会 302）
 on:
   push:
     branches: [main]
@@ -22,8 +20,8 @@ jobs:
       matrix:
         node: [20, 22]
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
         with:
           node-version: ${{ matrix.node }}
       - name: Syntax check
@@ -35,11 +33,12 @@ jobs:
 
   live:
     name: live network probes
+    if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     continue-on-error: true
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
         with:
           node-version: 22
       - name: Live tests (hits real search engines)
