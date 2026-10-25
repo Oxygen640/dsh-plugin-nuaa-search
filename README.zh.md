@@ -25,7 +25,7 @@ DSH（DeepSeek Harness）的免 key 搜索插件。它向 `ctx.web` 注册一个
 
 ## 1. 安装
 
-**这个包没有发布到 npm**（作者注册不了 npm 账号），所以**不要**执行
+**这个包没有发布到 npm**，所以**不要**执行
 `dsh plugin add dsh-plugin-nuaa-search` —— 那个名字在 registry 里不存在，会 404。
 三条可用的安装方式：
 
