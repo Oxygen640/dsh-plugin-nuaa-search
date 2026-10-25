@@ -2,7 +2,10 @@
 // 一半是纯逻辑（降级链、注册、截止时间），一半是真联网（真的去 Bing 搜）。
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import plugin, { LocalSearchProvider, resolveChain, apply, name, inject } from '../index.js';
+import plugin, { LocalSearchProvider, resolveChain, apply, name, inject, normalizeQuery, MAX_QUERY_CHARS } from '../index.js';
+
+// 真联网的用例带 SKIP_LIVE=1 就跳过（CI 的 unit job 用它，保证离线必过）
+const LIVE = { skip: process.env.SKIP_LIVE === '1' ? 'SKIP_LIVE=1（离线模式）' : false };
 
 /** 造一个只装了 web 接缝的假 ctx。 */
 function fakeCtx() {
@@ -68,7 +71,7 @@ test('后端不可用（searxng 未配置）时返回空结果而不是抛错', 
   assert.deepEqual(result.sources, []);
 });
 
-test('真联网：能搜到真实结果，且形状合规', async () => {
+test('真联网：能搜到真实结果，且形状合规', LIVE, async () => {
   const provider = new LocalSearchProvider(() => ({ backend: 'auto', maxResults: 8, deadlineMs: 20000, backendTimeoutMs: 8000, searxngUrl: '', userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36', log: false }));
   const result = await provider.search({ query: 'DeepSeek 是什么' });
   assert.ok(result.sources.length > 0, '应该搜到结果（若失败先跑 node probe.mjs 看网络）');
@@ -86,14 +89,14 @@ test('真联网：能搜到真实结果，且形状合规', async () => {
   console.log('    真实结果示例:', result.sources.slice(0, 3).map((s) => `${s.title} | ${s.url}`));
 });
 
-test('request.maxResults 会被尊重', async () => {
+test('request.maxResults 会被尊重', LIVE, async () => {
   const provider = new LocalSearchProvider(() => ({ backend: 'bing', maxResults: 8, deadlineMs: 20000, backendTimeoutMs: 8000, searxngUrl: '', userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36', log: false }));
   const result = await provider.search({ query: '南京航空航天大学', maxResults: 3 });
   assert.ok(result.sources.length > 0);
   assert.ok(result.sources.length <= 3, `最多 3 条，实际 ${result.sources.length}`);
 });
 
-test('查询保真：不同查询拿到不同结果', async () => {
+test('查询保真：不同查询拿到不同结果', LIVE, async () => {
   const provider = new LocalSearchProvider(() => ({ backend: 'bing', maxResults: 5, deadlineMs: 20000, backendTimeoutMs: 8000, searxngUrl: '', userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36', log: false }));
   const [a, b] = await Promise.all([
     provider.search({ query: 'Python asyncio 教程' }),
@@ -110,4 +113,32 @@ test('调用方取消信号能打断搜索', async () => {
   ctl.abort(); // 立刻取消
   const result = await pending;
   assert.deepEqual(result.sources, []);
+});
+
+test('进来时 signal 已取消：立刻返回，不打网络', async () => {
+  const provider = new LocalSearchProvider(() => ({ backend: 'bing', maxResults: 8, deadlineMs: 20000, backendTimeoutMs: 8000, searxngUrl: '', userAgent: 'x', log: false }));
+  const ctl = new AbortController();
+  ctl.abort(); // 调用前就取消
+  const started = Date.now();
+  const result = await provider.search({ query: 'DeepSeek' }, ctl.signal);
+  const elapsed = Date.now() - started;
+  assert.deepEqual(result.sources, []);
+  assert.ok(elapsed < 50, `不该发起网络请求，实际耗时 ${elapsed}ms`);
+});
+
+test('normalizeQuery：截断超长、去空白、非字符串给空', () => {
+  assert.equal(normalizeQuery('  DeepSeek  '), 'DeepSeek');
+  assert.equal(normalizeQuery('   '), '');
+  assert.equal(normalizeQuery(undefined), '');
+  assert.equal(normalizeQuery(123), '');
+  const long = '超长查询测试'.repeat(300);
+  assert.equal(normalizeQuery(long).length, MAX_QUERY_CHARS);
+  assert.ok(MAX_QUERY_CHARS <= 300, '上限必须落在搜索引擎能接受的范围');
+});
+
+test('超长查询不会再搜不到（会被截断到上限内）', LIVE, async () => {
+  const provider = new LocalSearchProvider(() => ({ backend: 'bing', maxResults: 5, deadlineMs: 15000, backendTimeoutMs: 8000, searxngUrl: '', userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36', log: false }));
+  const long = 'DeepSeek 是什么'.repeat(200); // 远超上限
+  const result = await provider.search({ query: long });
+  assert.ok(result.sources.length > 0, '截断后仍应能搜到结果');
 });
