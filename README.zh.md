@@ -1,11 +1,12 @@
 # dsh-plugin-nuaa-search
 
-DSH（DeepSeek Harness）的本地搜索插件。它向 `ctx.web` 注册一个搜索提供方
+DSH（DeepSeek Harness）的免 key 搜索插件。它向 `ctx.web` 注册一个搜索提供方
 （id = `local-search`），让 `web_search` 工具直接由本插件去真实搜索引擎取结果，
-**不需要官方 DeepSeek API key**。
-
+**不需要官方 DeepSeek API key，也不需要任何第三方搜索 API key**。
 
 > 第三方社区插件，与南京航空航天大学官方无关。名字里的 `nuaa` 只是为了便于本校同学在插件市场里搜到；插件本身对任何网络环境通用。
+
+已收录进 DSH 插件市场：<https://awesome-dsh-plugin.com/p/Oxygen640/dsh-plugin-nuaa-search/>
 
 它是 `@deepseek-ai/dsh-web-search-deepseek` 的替代品，不是包装：
 
@@ -24,25 +25,37 @@ DSH（DeepSeek Harness）的本地搜索插件。它向 `ctx.web` 注册一个�
 
 ## 1. 安装
 
-用自带 CLI（`dsh plugin` 会把剩余参数转发给 profile 目录里的 pnpm）：
+**这个包没有发布到 npm**（作者注册不了 npm 账号），所以**不要**执行
+`dsh plugin add dsh-plugin-nuaa-search` —— 那个名字在 registry 里不存在，会 404。
+三条可用的安装方式：
+
+### 方式一：插件市场（最省事）
+
+在 DSH 里打开 `设置 → 插件`，搜 `nuaa` 或「南航」，点安装。
+
+> 市场的「下载地区」如果是**中国大陆**，目录数据来自 npm 镜像上的
+> `dsh-plugin-catalog` 包，它每天北京时间约 10:23 的夜间构建才刷新一次。
+> 刚合并的条目可能晚一天才搜得到；等不及就把下载地区切成「全球」，走站点目录。
+
+### 方式二：预构建 tarball（推荐给命令行用户）
 
 ```bat
-dsh plugin --profile desktop add link:D:\Ai_Coding_Project\Problems\dsh-plugin-nuaa-search
+dsh plugin --profile desktop add "https://github.com/Oxygen640/dsh-plugin-nuaa-search/releases/latest/download/dsh-plugin-nuaa-search.tgz"
+```
+
+### 方式三：直接从 GitHub 源码装
+
+```bat
+dsh plugin --profile desktop add github:Oxygen640/dsh-plugin-nuaa-search
 ```
 
 `desktop` 是桌面版使用的 profile（`$DSH_HOME/profiles/desktop`）。装完这个命令会自动做三件事：
 
-1. `package.json` 记录依赖 `dsh-plugin-nuaa-search: link:<你的路径>`；
+1. `package.json` 记录这条依赖；
 2. 把包名追加进 `dsh.profile.bundles`（**顺序很重要**，排在最后才能盖住 base 的配置）；
-3. 在 `node_modules` 里建符号链接。
+3. 在 `node_modules` 里装好包。
 
 然后**重启 DSH** 生效（bundle 列表变化不属于 profile 的 live patch 监视范围）。
-
-从 npm 安装（发布之后）就是普通包名：
-
-```bat
-dsh plugin --profile desktop add dsh-plugin-nuaa-search
-```
 
 ### 卸载 / 回退
 
@@ -148,11 +161,10 @@ interface WebSearchProvider {
 ## 5. 自测
 
 ```bat
-cd /d D:\Ai_Coding_Project\Problems\dsh-plugin-nuaa-search
 node --test test/provider.test.mjs
 ```
 
-10 项，一半纯逻辑一半真联网：
+13 项，纯逻辑部分不打网络，联网部分真的去 Bing 搜：
 
 ```
 ✔ 插件身份：name / inject / apply 形状正确
@@ -165,12 +177,15 @@ node --test test/provider.test.mjs
 ✔ request.maxResults 会被尊重
 ✔ 查询保真：不同查询拿到不同结果
 ✔ 调用方取消信号能打断搜索
+✔ 进来时 signal 已取消：立刻返回，不打网络
+✔ normalizeQuery：截断超长、去空白、非字符串给空
+✔ 超长查询不会再搜不到（会被截断到上限内）
 ```
 
 ## 6. 验证记录
 
-除了单测，还在真实 DSH 组合里跑过一整轮：新建临时 profile
-（`dsh --profile localtest --from-default-profile headless`）装同一个包，让模型自己去调
+除了单测，还在真实 DSH 组合里跑过一轮：新建临时 profile
+（`dsh --profile <临时名> --from-default-profile headless`）装同一个包，让模型自己去调
 `web_search`，宿主日志出现本插件的一行，模型拿到的是真实来源：
 
 ```
@@ -185,7 +200,20 @@ node --test test/provider.test.mjs
 `dsh --profile desktop --dump-config` 也确认了最终树：
 `web.searchProvider: local-search`、`web-search-local` 行已插入、`web-search-deepseek` 已 `disabled: true`。
 
-## 7. 已知限制
+## 7. 发新版本
+
+没有 registry 参与，所以发版就是：改 `package.json` 的 `version` → 打包 → 用**同一个附件名**
+挂到新的 GitHub Release 上（附件名不带版本号，`latest/download/` 那个链接才不会失效）。
+
+```bat
+npm pack --pack-destination release
+ren release\dsh-plugin-nuaa-search-0.1.1.tgz dsh-plugin-nuaa-search.tgz
+```
+
+然后在 GitHub 上发布 Release 并附上 `dsh-plugin-nuaa-search.tgz`。
+市场条目里的 `tarball:` 指向的就是 `latest/download/`，**不用改条目**。
+
+## 8. 已知限制
 
 - **抓取方案的通病**：Bing 的 HTML 结构改版就得改解析器。真到那天把 `backend` 切成
   `so360`，或上自建 SearXNG。
@@ -193,11 +221,13 @@ node --test test/provider.test.mjs
 - **`publishedAt` 是猜的**：只在摘要开头的日期能被识别时才填
   （`2025年2月6日` / `Oct 1, 2026` / `2025-02-06`），识别不到就不填，不瞎编。
 - **单查询、不翻页**：每次 `search()` 只搜一次。
+- **查询词截断到 200 字符**：再长搜索引擎也不认，截断比拿到空结果强。
 - **没有设置页**：DSH 的「插件配置」标签页是各包手写卡片的，本插件只提供宿主侧能力，
   配置走 `cordis.patch.yml` 或环境变量。
+- **没发 npm**：所以没有下载量统计，市场里走的是 Release tarball 而不是 registry 包。
 - 高频请求可能被搜索引擎限流，这是给个人用的插件。
 
-## 8. 文件
+## 9. 文件
 
 | 文件 | 作用 |
 | --- | --- |
@@ -205,4 +235,5 @@ node --test test/provider.test.mjs
 | `cordis.patch.yml` | bundle patch：挂载插件、指定 `searchProvider`、停用官方行 |
 | `package.json` | 包元数据；`dsh.bundle.patch` 指向上面那个 patch |
 | `test/provider.test.mjs` | 单测（含真联网） |
+| `.github/workflows/node-test.yml` | CI：每次推送跑一遍单测 |
 | `README.zh.md` | 本文件 |

@@ -8,7 +8,6 @@ third-party search API key, no settings card.
 
 > 中文说明见 [`README.zh.md`](./README.zh.md)。
 
-
 > Third-party community plugin, not affiliated with Nanjing University of Aeronautics and Astronautics. The `nuaa` in the name only helps students find it in the market; the plugin itself is network-agnostic.
 
 ## Why
@@ -22,10 +21,23 @@ results itself.
 
 ## Install
 
-From the market, or:
+This package is **not published to npm** (npm signup was unavailable for the author), so
+install it from the market or from a prebuilt release tarball — do not run
+`dsh plugin add <package-name>`, there is no registry entry behind that name.
+
+**From the market (easiest):** open DSH → Settings → Plugins, search `nuaa`, and install.
+Listing: <https://awesome-dsh-plugin.com/p/Oxygen640/dsh-plugin-nuaa-search/>
+
+**From the prebuilt tarball:**
 
 ```bat
-dsh plugin --profile desktop add dsh-plugin-nuaa-search
+dsh plugin --profile desktop add "https://github.com/Oxygen640/dsh-plugin-nuaa-search/releases/latest/download/dsh-plugin-nuaa-search.tgz"
+```
+
+**From source:**
+
+```bat
+dsh plugin --profile desktop add github:Oxygen640/dsh-plugin-nuaa-search
 ```
 
 Restart the harness. The bundle patch points `web.searchProvider` at `local-search` and
@@ -55,7 +67,11 @@ Passed as the row `config` in `cordis.patch.yml`, or via environment variables a
 | `deadlineMs` | `20000` | internal deadline — returns what it has instead of hanging |
 | `backendTimeoutMs` | `8000` | per-backend timeout |
 | `searxngUrl` | — | instance base URL |
+| `userAgent` | Chrome 126 UA | user agent used for scraping |
 | `log` | `true` | one summary line per search in the host log |
+
+Environment fallbacks: `SEARCH_BACKEND`, `SEARCH_MAX_RESULTS`, `SEARCH_DEADLINE_MS`,
+`SEARXNG_URL`, `SEARCH_USER_AGENT`.
 
 ## Test
 
@@ -63,8 +79,21 @@ Passed as the row `config` in `cordis.patch.yml`, or via environment variables a
 node --test test/provider.test.mjs
 ```
 
-10 tests, including live network searches, query fidelity, `maxResults`, deadline, and
-caller cancellation.
+13 tests: backend-chain and config logic, the provider contract, live network searches,
+`maxResults`, deadline, cancellation (including an already-aborted signal), and query
+length normalization.
+
+## Releasing a new version
+
+No registry is involved, so a release is: bump `version` in `package.json`, then build and
+attach the tarball under the **same asset name** so the `latest/download/` URL keeps working.
+
+```bat
+npm pack --pack-destination release
+ren release\dsh-plugin-nuaa-search-0.1.1.tgz dsh-plugin-nuaa-search.tgz
+```
+
+Then publish a GitHub release and attach `dsh-plugin-nuaa-search.tgz`.
 
 ## Limitations
 
@@ -72,6 +101,7 @@ caller cancellation.
 - Relevance is the search engine's; results are passed through, not re-ranked or summarized.
 - `publishedAt` is only set when a date is readable at the start of the snippet — never invented.
 - One query per call, no pagination.
+- Queries are truncated to 200 characters, which is where search engines stop honoring them anyway.
 
 ## License
 

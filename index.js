@@ -428,6 +428,19 @@ function errorName(err) {
   return err.name || 'error';
 }
 
+/** 查询词长度上限。搜索引擎对超长 query 要么回 414，要么干脆给 0 条。 */
+export const MAX_QUERY_CHARS = 200;
+
+/**
+ * 清洗查询词：去首尾空白 + 截断超长。
+ * @param {unknown} raw 调用方给的 query
+ * @returns {string} 可直接塞进 URL 的查询词，空串表示没有有效查询
+ */
+export function normalizeQuery(raw) {
+  if (typeof raw !== 'string') return '';
+  return raw.trim().slice(0, MAX_QUERY_CHARS);
+}
+
 // ---------------------------------------------------------------------------
 // Provider + Cordis 插件
 // ---------------------------------------------------------------------------
@@ -457,7 +470,9 @@ export class LocalSearchProvider {
    */
   async search(request, signal) {
     const config = this.resolveConfig();
-    const query = typeof request?.query === 'string' ? request.query.trim() : '';
+    // 调用方在进来之前就已经取消（例如工具预算已耗尽）：立刻返回，不要再打网络
+    if (signal?.aborted === true) return { sources: [], truncated: false };
+    const query = normalizeQuery(request?.query);
     if (query === '') return { sources: [], truncated: false };
     // 尊重调用方给的条数上限，但不超过自己的配置
     const wanted = Number.isInteger(request?.maxResults) && request.maxResults > 0 ? request.maxResults : config.maxResults;
@@ -496,4 +511,4 @@ export function apply(ctx, config) {
   ctx.web.registerSearchProvider(provider);
 }
 
-export default { name, inject, apply, LocalSearchProvider, resolveChain, runSearch };
+export default { name, inject, apply, LocalSearchProvider, resolveChain, runSearch, normalizeQuery, MAX_QUERY_CHARS };
