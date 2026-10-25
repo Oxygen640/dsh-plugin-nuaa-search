@@ -21,7 +21,7 @@ results itself.
 
 ## Install
 
-This package is **not published to npm** (npm signup was unavailable for the author), so
+This package is **not published to npm**, so
 install it from the market or from a prebuilt release tarball — do not run
 `dsh plugin add <package-name>`, there is no registry entry behind that name.
 
