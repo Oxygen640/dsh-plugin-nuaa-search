@@ -49,6 +49,14 @@ disables the official `web-search-deepseek` row (re-enable it in your profile's
 `auto` (default) = `bing` → `so360` → `searxng`: the first backend that returns results
 wins, so a blocked or broken engine costs one timeout, not the whole search.
 
+**Query variants.** Chinese long-tail queries break Bing's ranking: `南京航空航天大学图书馆`
+returns the official library pages, while `南京航空航天大学图书馆 预约座位` returns generic
+"南京市" pages instead. So each search also runs a second variant with trailing intent words
+(`开放时间`, `预约座位`, `几点`, `怎么…`, `地址`, …) stripped, and keeps whichever result set
+is more relevant to the entity phrase (longest-common-substring coverage; ties keep the
+original query so ordinary searches are unaffected). Measured on the failing case: 1/8 → 7/8
+results from `nuaa.edu.cn`. Turn it off with `stripIntent: false`.
+
 | Backend | Status | Notes |
 | --- | --- | --- |
 | `bing` | default, ~270ms | Bing China HTML: direct URLs, snippets, publish dates |
@@ -69,6 +77,7 @@ Passed as the row `config` in `cordis.patch.yml`, or via environment variables a
 | `searxngUrl` | — | instance base URL |
 | `userAgent` | Chrome 126 UA | user agent used for scraping |
 | `log` | `true` | one summary line per search in the host log |
+| `stripIntent` | `true` | also search the entity phrase with trailing intent words stripped |
 
 Environment fallbacks: `SEARCH_BACKEND`, `SEARCH_MAX_RESULTS`, `SEARCH_DEADLINE_MS`,
 `SEARXNG_URL`, `SEARCH_USER_AGENT`.
@@ -79,9 +88,9 @@ Environment fallbacks: `SEARCH_BACKEND`, `SEARCH_MAX_RESULTS`, `SEARCH_DEADLINE_
 node --test test/provider.test.mjs
 ```
 
-13 tests: backend-chain and config logic, the provider contract, live network searches,
-`maxResults`, deadline, cancellation (including an already-aborted signal), and query
-length normalization.
+17 tests: backend-chain and config logic, the provider contract, query-variant relevance,
+live network searches, `maxResults`, deadline, cancellation (including an already-aborted
+signal), and query length normalization.
 
 ## Releasing a new version
 
@@ -90,7 +99,7 @@ attach the tarball under the **same asset name** so the `latest/download/` URL k
 
 ```bat
 npm pack --pack-destination release
-ren release\dsh-plugin-nuaa-search-0.1.1.tgz dsh-plugin-nuaa-search.tgz
+ren release\dsh-plugin-nuaa-search-0.1.2.tgz dsh-plugin-nuaa-search.tgz
 ```
 
 Then publish a GitHub release and attach `dsh-plugin-nuaa-search.tgz`.
@@ -98,7 +107,12 @@ Then publish a GitHub release and attach `dsh-plugin-nuaa-search.tgz`.
 ## Limitations
 
 - HTML scraping: a Bing markup change needs a parser update (switch `backend` to `so360` meanwhile).
-- Relevance is the search engine's; results are passed through, not re-ranked or summarized.
+- **Bing ranks multi-token Chinese queries badly.** It handles a clean entity name
+  (`南航图书馆`, `南京航空航天大学图书馆`) well, but degrades toward generic city pages when
+  extra qualifiers pile up — `南京航空航天大学将军路校区图书馆` already returns "南京市".
+  The query-variant fix covers the common "entity + intent word" shape, not this one.
+- `site:` queries are not supported by the HTML endpoint and are passed through as plain text.
+- Relevance is the search engine's; results are passed through, not rewritten or summarized.
 - `publishedAt` is only set when a date is readable at the start of the snippet — never invented.
 - One query per call, no pagination.
 - Queries are truncated to 200 characters, which is where search engines stop honoring them anyway.

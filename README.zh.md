@@ -139,6 +139,13 @@ interface WebSearchProvider {
 | `searxng` | ⚠️ 需自建 | 公共实例在本机网络全部不可达，还要在实例上开 `format=json` |
 | `baidu` | ⚠️ 常被拦 | 会弹「百度安全验证」，检测到就返回空结果，不会把验证页当结果 |
 
+**查询变体（0.1.2 起）**：中文长尾查询会让 Bing 跑偏 ——
+`南京航空航天大学图书馆` 能命中官网，但加上「预约座位」就退化成「南京市_百度百科 / 南京旅游」。
+所以每次搜索会同时发**两个变体**：原文 + 剥掉尾部意图词（`开放时间` / `预约座位` / `几点` / `怎么…` / `地址`…）
+之后的「实体短语」；再用最长公共子串覆盖率挑更相关的那一组，覆盖率接近时保留原文那组
+（普通查询不受影响）。实测这条修复把失败案例从 **1/8 命中官网提升到 7/8**。
+不想要这个行为就把 `stripIntent` 设成 `false`。
+
 官方 API（Bing/Brave/Serper/Tavily/Exa）**不依赖**，也没实现 —— 它们都要 key。
 
 ## 4. 配置
@@ -154,6 +161,7 @@ interface WebSearchProvider {
 | `searxngUrl` | 空 | `searxng` 后端的实例地址 |
 | `userAgent` | Chrome 126 UA | 抓取 UA |
 | `log` | `true` | 是否在宿主日志打一行每请求摘要 |
+| `stripIntent` | `true` | 是否额外用「剥掉意图词的实体短语」再查一次 |
 
 也可以用环境变量兜底覆盖：`SEARCH_BACKEND`、`SEARCH_MAX_RESULTS`、
 `SEARCH_DEADLINE_MS`、`SEARXNG_URL`、`SEARCH_USER_AGENT`。
@@ -164,7 +172,7 @@ interface WebSearchProvider {
 node --test test/provider.test.mjs
 ```
 
-13 项，纯逻辑部分不打网络，联网部分真的去 Bing 搜：
+17 项，纯逻辑部分不打网络，联网部分真的去 Bing 搜：
 
 ```
 ✔ 插件身份：name / inject / apply 形状正确
@@ -180,6 +188,10 @@ node --test test/provider.test.mjs
 ✔ 进来时 signal 已取消：立刻返回，不打网络
 ✔ normalizeQuery：截断超长、去空白、非字符串给空
 ✔ 超长查询不会再搜不到（会被截断到上限内）
+✔ stripIntent：剥掉尾部意图词，得到实体短语
+✔ buildVariants：只有剥出实体短语时才多查一次
+✔ 相关性选组：选更相关的那组，接近时保留原文组
+✔ 真联网：长尾中文查询也能命中学校官网
 ```
 
 ## 6. 验证记录
@@ -207,7 +219,7 @@ node --test test/provider.test.mjs
 
 ```bat
 npm pack --pack-destination release
-ren release\dsh-plugin-nuaa-search-0.1.1.tgz dsh-plugin-nuaa-search.tgz
+ren release\dsh-plugin-nuaa-search-0.1.2.tgz dsh-plugin-nuaa-search.tgz
 ```
 
 然后在 GitHub 上发布 Release 并附上 `dsh-plugin-nuaa-search.tgz`。
@@ -217,6 +229,10 @@ ren release\dsh-plugin-nuaa-search-0.1.1.tgz dsh-plugin-nuaa-search.tgz
 
 - **抓取方案的通病**：Bing 的 HTML 结构改版就得改解析器。真到那天把 `backend` 切成
   `so360`，或上自建 SearXNG。
+- **Bing 对「多限定词」的中文查询排序很差**：干净的实体名（`南航图书馆`）没问题，
+  但限定词一多（`南京航空航天大学将军路校区图书馆`）就会退化成「南京市」这类通用页。
+  查询变体修复覆盖的是「实体名 + 意图词」这种最常见的形状，压不住这一种。
+- **`site:` 语法不被 HTML 端点支持**，会被当普通词传给引擎。
 - **结果相关性取决于搜索引擎本身**，插件如实转发，不加工、不加摘要、不做 LLM 改写。
 - **`publishedAt` 是猜的**：只在摘要开头的日期能被识别时才填
   （`2025年2月6日` / `Oct 1, 2026` / `2025-02-06`），识别不到就不填，不瞎编。

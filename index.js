@@ -42,6 +42,12 @@ const DEFAULTS = {
     'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36',
   /** 是否在宿主日志里打一行每请求摘要 */
   log: true,
+  /**
+   * 是否剥掉查询尾部的"意图词"再查一次（见 stripIntent）。
+   * 实测中文长尾查询（"南京航空航天大学图书馆 预约座位"）会让 Bing 退化到
+   * 城市通用页，剥掉"预约座位"后才命中官网 —— 默认开。
+   */
+  stripIntent: true,
 };
 
 /** 配置夹紧：数字有上下限，字符串去掉空值。 */
@@ -63,6 +69,7 @@ function normalizeConfig(raw) {
     searxngUrl: str(input.searxngUrl ?? process.env.SEARXNG_URL, DEFAULTS.searxngUrl),
     userAgent: str(input.userAgent ?? process.env.SEARCH_USER_AGENT, DEFAULTS.userAgent),
     log: bool(input.log, DEFAULTS.log),
+    stripIntent: bool(input.stripIntent, DEFAULTS.stripIntent),
   };
 }
 
@@ -360,15 +367,159 @@ export function resolveChain(backend) {
 }
 
 // ---------------------------------------------------------------------------
+// 查询变体：中文长尾查询的相关性修复
+// ---------------------------------------------------------------------------
+
+/**
+ * 中文查询里的"意图词"。
+ *
+ * 这些词描述的是"你想对实体做什么"（查时间、查电话、预约），不是"实体是谁"。
+ * 实测（2026-10）cn.bing.com 在实体名后面多挂这类词就会跑偏：
+ *   「南京航空航天大学图书馆」        → 8 条里 7 条命中 lib.nuaa.edu.cn
+ *   「南京航空航天大学图书馆 预约座位」→ 0 条，全变成"南京市_百度百科/南京旅游"
+ *   「南航图书馆 开放时间」            → 变成"中国南方航空"
+ *   「南航图书馆」（剥掉"开放时间"）    → 8 条里 7 条命中官网
+ * 所以把尾部意图词剥掉，得到"实体短语"，往往才是真正该送去检索的词。
+ */
+const INTENT_WORDS = [
+  '什么时候开门', '什么时候关门', '几点开门', '几点关门', '怎么预约座位', '怎么预约',
+  '开放时间', '预约座位', '联系方式', '怎么联系', '怎么走', '怎么去', '怎么进',
+  '在哪里', '多少钱', '什么意思', '有哪些', '几点', '预约', '座位', '地址', '电话',
+  '官网', '入口', '主页', '首页', '在哪', '位置', '怎么样', '如何', '是什么', '哪些',
+  '价格', '收费', '费用', '攻略', '推荐', '介绍', '查询', '时间',
+];
+const INTENT_BY_LENGTH = [...INTENT_WORDS].sort((a, b) => b.length - a.length);
+const INTENT_SET = new Set(INTENT_WORDS);
+/** 尾部以这些前缀开头的词也算意图（"怎么…""几点…""多少…"）。 */
+const INTENT_PREFIX = /^(怎么|如何|几点|在哪|哪里|什么时候|多少|能否|可以|要不要|有没有)/;
+
+/** 一个词是不是意图词。 */
+function isIntentToken(token) {
+  const t = token.trim();
+  if (t === '') return false;
+  return INTENT_SET.has(t) || INTENT_PREFIX.test(t);
+}
+
+/** 剥掉一层尾部意图（空白分词优先，其次整串后缀匹配）。 */
+function stripOneTrailing(text) {
+  const t = text.replace(/[\s?？!！。.,，、;；:：]+$/u, '');
+  if (t === '') return '';
+  const parts = t.split(/\s+/);
+  if (parts.length > 1 && isIntentToken(parts[parts.length - 1])) {
+    return parts.slice(0, -1).join(' ');
+  }
+  for (const word of INTENT_BY_LENGTH) {
+    if (t.length > word.length + 1 && t.endsWith(word)) return t.slice(0, -word.length);
+  }
+  return t;
+}
+
+/**
+ * 反复剥掉尾部意图词，得到"实体短语"。
+ * 只从尾部剥，避免误伤词中的字（例如书名里的"时间"）。
+ * @param {string} query 原始查询
+ * @returns {string} 实体短语；剥不动就原样返回
+ */
+export function stripIntent(query) {
+  let s = String(query ?? '').trim();
+  for (let i = 0; i < 6; i++) {
+    const next = stripOneTrailing(s);
+    if (next === s || next.trim().length < 2) break;
+    s = next;
+  }
+  return s.trim();
+}
+
+/**
+ * 一次检索要发的查询变体：原文 + 实体短语（相同则不重复）。
+ * @param {string} query 原始查询
+ * @param {boolean} [enabled] 关掉就只查原文
+ * @returns {string[]}
+ */
+export function buildVariants(query, enabled = true) {
+  const original = String(query ?? '').trim();
+  if (original === '') return [];
+  if (!enabled) return [original];
+  const stripped = stripIntent(original);
+  return stripped !== original && stripped.length >= 2 ? [original, stripped] : [original];
+}
+
+/** 去掉空格与标点，只留用于比较的字符。 */
+function compactChars(text) {
+  return String(text ?? '').toLowerCase().replace(/[\s\p{P}\p{S}]+/gu, '');
+}
+
+/**
+ * 最长公共子串长度（字符级）。中文没有分词，用 LCS 衡量"这条结果到底在讲不在这件事"。
+ * 只用于相关性判断，不参与展示。
+ */
+export function longestCommonSubstring(a, b) {
+  const A = compactChars(a);
+  const B = compactChars(b);
+  if (A === '' || B === '') return 0;
+  let best = 0;
+  let prev = new Array(B.length + 1).fill(0);
+  for (let i = 1; i <= A.length; i++) {
+    const cur = new Array(B.length + 1).fill(0);
+    for (let j = 1; j <= B.length; j++) {
+      if (A[i - 1] !== B[j - 1]) continue;
+      cur[j] = prev[j - 1] + 1;
+      if (cur[j] > best) best = cur[j];
+    }
+    prev = cur;
+  }
+  return best;
+}
+
+/**
+ * 一组结果与"实体短语"的相关度：取最好的一条的覆盖率（0~1）。
+ * 用最好而不是平均，是因为官网首页标题常常就叫"首页"，平均会被它拖垮。
+ */
+export function relevanceOf(sources, entity) {
+  const entityLen = compactChars(entity).length;
+  if (entityLen === 0 || !Array.isArray(sources) || sources.length === 0) return 0;
+  let best = 0;
+  for (const source of sources) {
+    const text = `${source.title ?? ''} ${source.snippet ?? ''} ${source.url ?? ''}`;
+    const cover = longestCommonSubstring(entity, text) / entityLen;
+    if (cover > best) best = cover;
+  }
+  return best;
+}
+
+/**
+ * 多个查询变体各返回一组结果，选相关性最高的一组。
+ * 覆盖率接近（差距 ≤ 0.15）时保留靠前的变体，也就是优先用用户原话 ——
+ * 正常查询下搜索引擎自己的排序比我们的启发式更可靠。
+ * @param {(object[]|null)[]} groups 各变体结果（null 表示该变体失败）
+ * @param {string} entity 实体短语
+ * @returns {object[]}
+ */
+export function chooseGroup(groups, entity) {
+  const scored = (Array.isArray(groups) ? groups : [])
+    .map((group, index) => ({ group: group ?? [], index, relevance: group === null ? -1 : relevanceOf(group, entity) }))
+    .filter((x) => x.group.length > 0);
+  if (scored.length === 0) return [];
+  let winner = scored[0];
+  for (const candidate of scored.slice(1)) {
+    if (candidate.relevance > winner.relevance + 0.15) winner = candidate;
+  }
+  return winner.group;
+}
+
+// ---------------------------------------------------------------------------
 // 搜索流程
 // ---------------------------------------------------------------------------
 
 /**
- * 按降级链搜一遍。拿到第一批就停；到内部截止时间就返回已拿到的（宁可空结果，也不挂住）。
+ * 按降级链搜一遍。每个后端会同时查"原文"和"实体短语"两个变体，合并去重后按相关性重排。
+ * 拿到第一批结果就停；到内部截止时间就返回已拿到的（宁可空结果，也不挂住）。
  * @returns {Promise<{sources: object[], attempts: string[], timedOut: boolean}>}
  */
 export async function runSearch(query, config, signal, deadlineAt = Date.now() + config.deadlineMs) {
   const chain = resolveChain(config.backend);
+  const variants = buildVariants(query, config.stripIntent);
+  const entity = stripIntent(query) || query;
   const attempts = [];
   const ctl = new AbortController();
   const abort = () => ctl.abort();
@@ -387,19 +538,26 @@ export async function runSearch(query, config, signal, deadlineAt = Date.now() +
       }
       const timeoutMs = Math.min(config.backendTimeoutMs, left);
       const startedAt = Date.now();
-      try {
-        const got = await BACKENDS[name](query, { config, timeoutMs, signal: combined });
-        attempts.push(`${name}=${got.length}(${Date.now() - startedAt}ms)`);
-        if (got.length > 0) {
-          sources = got;
-          break;
-        }
-      } catch (err) {
-        attempts.push(`${name}=${errorName(err)}(${Date.now() - startedAt}ms)`);
-        if (combined.aborted) {
-          timedOut = true;
-          break;
-        }
+      // 每个变体并行查同一后端：一个变体失败不影响另一个
+      const settled = await Promise.allSettled(
+        variants.map((variant) => BACKENDS[name](variant, { config, timeoutMs, signal: combined })),
+      );
+      const groups = settled.map((r) => (r.status === 'fulfilled' ? r.value : null));
+      const rawCount = groups.reduce((n, group) => n + (group?.length ?? 0), 0);
+      const chosen = chooseGroup(groups, entity);
+      const failed = settled.filter((r) => r.status === 'rejected');
+      attempts.push(
+        `${name}=${rawCount}${variants.length > 1 ? `/${variants.length}v` : ''}→${chosen.length}` +
+          `(${Date.now() - startedAt}ms)` +
+          (failed.length > 0 ? `!${errorName(failed[0].reason)}` : ''),
+      );
+      if (chosen.length > 0) {
+        sources = chosen;
+        break;
+      }
+      if (combined.aborted) {
+        timedOut = true;
+        break;
       }
     }
   } finally {
@@ -407,7 +565,7 @@ export async function runSearch(query, config, signal, deadlineAt = Date.now() +
     signal?.removeEventListener('abort', abort);
   }
 
-  // 按 url 去重并截断
+  // 兜底去重与截断（chooseGroup 已保证组内有序，这里只去重并截断到上限）
   const seen = new Set();
   const unique = [];
   for (const source of sources) {
@@ -511,4 +669,7 @@ export function apply(ctx, config) {
   ctx.web.registerSearchProvider(provider);
 }
 
-export default { name, inject, apply, LocalSearchProvider, resolveChain, runSearch, normalizeQuery, MAX_QUERY_CHARS };
+export default {
+  name, inject, apply, LocalSearchProvider, resolveChain, runSearch, normalizeQuery, MAX_QUERY_CHARS,
+  stripIntent, buildVariants, relevanceOf, chooseGroup, longestCommonSubstring,
+};
